@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/v2/key"
 	"github.com/charmbracelet/bubbles/v2/list"
@@ -99,6 +98,7 @@ type Model struct {
 	width  int
 	height int
 	keys   keyMap
+	err    error
 }
 
 type keyMap struct {
@@ -107,6 +107,7 @@ type keyMap struct {
 	Enter  key.Binding
 	Delete key.Binding
 	Pause  key.Binding
+	Retry  key.Binding
 }
 
 func defaultKeyMap() keyMap {
@@ -130,6 +131,10 @@ func defaultKeyMap() keyMap {
 		Pause: key.NewBinding(
 			key.WithKeys("p"),
 			key.WithHelp("p", "pause/resume"),
+		),
+		Retry: key.NewBinding(
+			key.WithKeys("r"),
+			key.WithHelp("r", "retry"),
 		),
 	}
 }
@@ -186,6 +191,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if selectedItem, ok := m.list.SelectedItem().(taskItem); ok {
 				return m, m.toggleTaskStatus(selectedItem.task.ID)
 			}
+
+		case key.Matches(msg, m.keys.Retry):
+			if m.err != nil {
+				m.err = nil
+				return m, m.loadTasks
+			}
 		}
 
 	case tasksLoadedMsg:
@@ -203,6 +214,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case taskUpdatedMsg:
 		return m, m.loadTasks
+
+	case errorMsg:
+		m.err = msg.err
+		// Clear tasks on error
+		m.tasks = []api.Task{}
+		cmd := m.list.SetItems([]list.Item{})
+		cmds = append(cmds, cmd)
 	}
 
 	// Update the list
@@ -233,7 +251,15 @@ func (m Model) View() string {
 	s.WriteString(headerStyle.Render("> SCHEDULED TASKS"))
 	s.WriteString("\n\n")
 
-	if len(m.tasks) == 0 {
+	if m.err != nil {
+		// Error state
+		errorStyle := styles.NewStyle().
+			Foreground(t.Error()).
+			Width(m.width-4).
+			Height(m.height-10).
+			Align(lipgloss.Center, lipgloss.Center)
+		s.WriteString(errorStyle.Render(fmt.Sprintf("Error loading tasks:\n%v\n\nPress [R] to retry", m.err)))
+	} else if len(m.tasks) == 0 {
 		// Empty state
 		emptyStyle := styles.NewStyle().
 			Foreground(t.TextMuted()).
@@ -276,53 +302,24 @@ type taskDeletedMsg struct{}
 
 type taskUpdatedMsg struct{}
 
+type errorMsg struct {
+	err error
+}
+
 func (m Model) loadTasks() tea.Msg {
-	// Mock tasks for now
-	mockTasks := []api.Task{
-		{
-			ID:       "1",
-			Name:     "Daily Task Summary",
-			Status:   "ACTIVE",
-			Prompt:   "Summarize today's Things tasks in iambic pentameter",
-			Schedule: "daily at 8:00 AM",
-			Output:   "SMS to +1234567890",
-			Model:    "gpt-4",
-			NextRun:  time.Now().Add(12 * time.Hour),
-			LastRun:  time.Now().Add(-12 * time.Hour),
-		},
-		{
-			ID:       "2",
-			Name:     "Team Commit Summary",
-			Status:   "ACTIVE",
-			Prompt:   "Send my team a summary of today's commits",
-			Schedule: "daily at 6:00 PM",
-			Output:   "Slack #dev-team",
-			Model:    "gpt-3.5-turbo",
-			NextRun:  time.Now().Add(6 * time.Hour),
-			LastRun:  time.Now().Add(-18 * time.Hour),
-		},
-		{
-			ID:       "3",
-			Name:     "Weekly Report",
-			Status:   "PAUSED",
-			Prompt:   "Generate a weekly productivity report based on my calendar and tasks",
-			Schedule: "weekly on Friday at 5:00 PM",
-			Output:   "Email to me@example.com",
-			Model:    "gpt-4",
-			NextRun:  time.Now().Add(72 * time.Hour),
-			LastRun:  time.Time{}, // Zero value for no last run
-		},
+	tasks, err := m.client.GetTasks()
+	if err != nil {
+		return errorMsg{err: err}
 	}
 
-	return tasksLoadedMsg{tasks: mockTasks}
+	return tasksLoadedMsg{tasks: tasks}
 }
 
 func (m Model) deleteTask(id string) tea.Cmd {
 	return func() tea.Msg {
 		err := m.client.DeleteTask(id)
 		if err != nil {
-			// TODO: Handle error
-			return nil
+			return errorMsg{err: err}
 		}
 		return taskDeletedMsg{}
 	}
@@ -352,8 +349,7 @@ func (m Model) toggleTaskStatus(id string) tea.Cmd {
 
 		_, err := m.client.UpdateTask(id, *task)
 		if err != nil {
-			// TODO: Handle error
-			return nil
+			return errorMsg{err: err}
 		}
 		return taskUpdatedMsg{}
 	}
