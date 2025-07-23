@@ -62,8 +62,8 @@ func defaultKeyMap() keyMap {
 			key.WithHelp("shift+tab", "previous tab"),
 		),
 		Quit: key.NewBinding(
-			key.WithKeys("ctrl+c", "esc"),
-			key.WithHelp("ctrl+c/esc", "quit"),
+			key.WithKeys("ctrl+c"),
+			key.WithHelp("ctrl+c", "quit"),
 		),
 		Help: key.NewBinding(
 			key.WithKeys("?"),
@@ -283,4 +283,3 @@ func (m Model) renderTabBar() string {
 		BorderForeground(t.BorderSubtle()).
 		Render(content)
 }
-
