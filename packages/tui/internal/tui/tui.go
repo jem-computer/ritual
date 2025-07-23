@@ -192,12 +192,8 @@ func (m Model) View() string {
 	tabBar := m.renderTabBar()
 	tabBarHeight := lipgloss.Height(tabBar)
 
-	// Status bar
-	statusBar := m.renderStatusBar()
-	statusBarHeight := lipgloss.Height(statusBar)
-
 	// Content area with calculated height
-	contentHeight := m.height - tabBarHeight - statusBarHeight
+	contentHeight := m.height - tabBarHeight
 	var content string
 	switch m.activeTab {
 	case DashboardTab:
@@ -224,7 +220,7 @@ func (m Model) View() string {
 		lipgloss.Top,
 		tabBar,
 		content,
-		statusBar,
+		// statusBar,
 	)
 }
 
@@ -239,8 +235,8 @@ func (m Model) renderTabBar() string {
 
 	for i, tab := range tabs {
 		style := styles.NewStyle().
-			Padding(0, 2).
-			MarginRight(1)
+			Padding(0, 1).
+			MarginRight(0)
 
 		if i == int(m.activeTab) {
 			style = style.
@@ -254,40 +250,37 @@ func (m Model) renderTabBar() string {
 		}
 
 		// Add keyboard shortcut hint
-		shortcut := fmt.Sprintf("[%s]", strings.ToLower(tab[:1]))
-		renderedTabs = append(renderedTabs, style.Render(shortcut+tab))
+		// shortcut := fmt.Sprintf("[%s] ", strings.ToLower(tab[:1]))
+		renderedTabs = append(renderedTabs, style.Render( /*shortcut+*/ tab))
 	}
 
-	tabBar := lipgloss.JoinHorizontal(lipgloss.Top, renderedTabs...)
+	logo := styles.NewStyle().
+		Foreground(t.Primary()).
+		Background(t.BackgroundPanel()).
+		Bold(true).
+		Padding(0, 2).
+		Render(fmt.Sprintf("☾ RITUAL ☽"))
+
+	tabsSection := lipgloss.JoinHorizontal(lipgloss.Top, renderedTabs...)
+
+	// Calculate spacing between logo and tabs
+	logoWidth := lipgloss.Width(logo)
+	tabsWidth := lipgloss.Width(tabsSection)
+	spacerWidth := m.width - logoWidth - tabsWidth - 0 // -2 for border padding
+	if spacerWidth < 0 {
+		spacerWidth = 1
+	}
+	spacer := strings.Repeat(" ", spacerWidth)
+
+	// Join logo, spacer, and tabs
+	content := lipgloss.JoinHorizontal(lipgloss.Top, logo, spacer, tabsSection)
+
 	return styles.NewStyle().
 		Width(m.width).
 		Background(t.BackgroundPanel()).
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderBottom(true).
 		BorderForeground(t.BorderSubtle()).
-		Render(tabBar)
+		Render(content)
 }
 
-func (m Model) renderStatusBar() string {
-	t := theme.CurrentTheme()
-	if t == nil {
-		return "No theme"
-	}
-
-	left := fmt.Sprintf(" Ritual %s", m.version)
-	right := "ESC to exit "
-
-	// Calculate padding
-	padding := m.width - len(left) - len(right)
-	if padding < 0 {
-		padding = 0
-	}
-
-	status := left + strings.Repeat(" ", padding) + right
-
-	return styles.NewStyle().
-		Width(m.width).
-		Background(t.BackgroundPanel()).
-		Foreground(t.TextMuted()).
-		Render(status)
-}
