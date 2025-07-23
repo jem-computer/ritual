@@ -45,16 +45,21 @@ type Model struct {
 }
 
 type keyMap struct {
-	Tab  key.Binding
-	Quit key.Binding
-	Help key.Binding
+	Tab      key.Binding
+	ShiftTab key.Binding
+	Quit     key.Binding
+	Help     key.Binding
 }
 
 func defaultKeyMap() keyMap {
 	return keyMap{
 		Tab: key.NewBinding(
 			key.WithKeys("tab"),
-			key.WithHelp("tab", "switch tabs"),
+			key.WithHelp("tab", "next tab"),
+		),
+		ShiftTab: key.NewBinding(
+			key.WithKeys("shift+tab"),
+			key.WithHelp("shift+tab", "previous tab"),
 		),
 		Quit: key.NewBinding(
 			key.WithKeys("ctrl+c", "esc"),
@@ -134,6 +139,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keys.Tab):
 			m.activeTab = (m.activeTab + 1) % 4
+
+		case key.Matches(msg, m.keys.ShiftTab):
+			m.activeTab = (m.activeTab + 3) % 4
 
 		case msg.String() == "d":
 			m.activeTab = DashboardTab
