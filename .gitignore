@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+vendor/
+
+# Build outputs
+dist/
+*.exe
+ritual
+
+# Go
+*.test
+*.out
+go.sum
+
+# Bun
+bun.lockb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log
