@@ -6,7 +6,7 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently \"npm run dev:server\" \"npm run dev:tui\"",
+    "dev": "node scripts/dev.js",
     "dev:server": "cd packages/server && bun run dev",
     "dev:tui": "cd packages/tui && go run cmd/ritual/main.go --server http://localhost:8080",
     "build": "npm run build:server && npm run build:tui",
