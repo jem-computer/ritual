@@ -5,6 +5,8 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { serve } from "@hono/node-server";
+import { taskQueue, closeQueue, isRedisConnected } from "./queue.js";
+import { parseSchedule } from "./schedule-parser.js";
 
 const app = new Hono();
 
@@ -12,8 +14,24 @@ const app = new Hono();
 app.use("/*", cors());
 app.use(logger());
 
+// Types
+interface Task {
+	id: string;
+	name: string;
+	status: "ACTIVE" | "PAUSED";
+	prompt: string;
+	schedule: string;
+	output: string;
+	model: string;
+	nextRun: string | null;
+	lastRun: string | null;
+	createdAt: string;
+	updatedAt: string;
+	jobId?: string; // BullMQ job ID for scheduled tasks
+}
+
 // Mock data store (in-memory for now)
-const mockTasks = [
+const mockTasks: Task[] = [
 	{
 		id: "1",
 		name: "Daily Task Summary",
@@ -56,9 +74,82 @@ const mockTasks = [
 	},
 ];
 
+// Helper functions for job management
+async function scheduleTask(task: Task) {
+	if (task.status !== "ACTIVE") {
+		return;
+	}
+
+	if (!isRedisConnected()) {
+		console.warn(`Cannot schedule task ${task.id}: Redis not connected`);
+		return;
+	}
+
+	try {
+		const { cron } = parseSchedule(task.schedule);
+		
+		// Remove existing job if it exists
+		if (task.jobId) {
+			await taskQueue.removeRepeatableByKey(task.jobId);
+		}
+
+		// Schedule new job
+		const job = await taskQueue.add(
+			`task-${task.id}`,
+			{
+				taskId: task.id,
+				prompt: task.prompt,
+				outputChannels: [task.output],
+				model: task.model,
+			},
+			{
+				repeat: {
+					pattern: cron,
+				},
+				repeatJobKey: task.id, // Use task ID as the repeat key
+			}
+		);
+
+		// Store the repeat key for later removal
+		task.jobId = task.id;
+		console.log(`Scheduled task ${task.id} with cron: ${cron}`);
+	} catch (error) {
+		console.error(`Failed to schedule task ${task.id}:`, error);
+	}
+}
+
+async function unscheduleTask(task: Task) {
+	if (task.jobId) {
+		try {
+			// Remove all repeatable jobs for this task
+			const repeatableJobs = await taskQueue.getRepeatableJobs();
+			for (const job of repeatableJobs) {
+				if (job.key.includes(`task-${task.id}`)) {
+					await taskQueue.removeRepeatableByKey(job.key);
+				}
+			}
+			console.log(`Unscheduled task ${task.id}`);
+		} catch (error) {
+			console.error(`Failed to unschedule task ${task.id}:`, error);
+		}
+	}
+}
+
+// Initialize scheduled tasks on startup
+async function initializeScheduledTasks() {
+	for (const task of mockTasks) {
+		if (task.status === "ACTIVE") {
+			await scheduleTask(task);
+		}
+	}
+}
+
 // Health check
 app.get("/health", (c) => {
-	return c.json({ status: "ok" });
+	return c.json({ 
+		status: "ok",
+		redis: isRedisConnected() ? "connected" : "disconnected"
+	});
 });
 
 // Task routes
@@ -68,13 +159,22 @@ app.get("/api/tasks", (c) => {
 
 app.post("/api/tasks", async (c) => {
 	const body = await c.req.json();
-	const newTask = {
+	const newTask: Task = {
 		id: String(mockTasks.length + 1),
 		...body,
+		nextRun: null,
+		lastRun: null,
 		createdAt: new Date().toISOString(),
 		updatedAt: new Date().toISOString(),
 	};
+	
 	mockTasks.push(newTask);
+	
+	// Schedule the task if it's active
+	if (newTask.status === "ACTIVE") {
+		await scheduleTask(newTask);
+	}
+	
 	return c.json(newTask, 201);
 });
 
@@ -87,17 +187,30 @@ app.put("/api/tasks/:id", async (c) => {
 		return c.json({ error: "Task not found" }, 404);
 	}
 
-	mockTasks[taskIndex] = {
-		...mockTasks[taskIndex],
+	const oldTask = mockTasks[taskIndex];
+	const updatedTask = {
+		...oldTask,
 		...body,
 		id, // Preserve the ID
 		updatedAt: new Date().toISOString(),
 	};
 
-	return c.json(mockTasks[taskIndex]);
+	// Handle scheduling changes
+	if (oldTask.status !== updatedTask.status || oldTask.schedule !== updatedTask.schedule) {
+		// Unschedule old job
+		await unscheduleTask(oldTask);
+		
+		// Schedule new job if active
+		if (updatedTask.status === "ACTIVE") {
+			await scheduleTask(updatedTask);
+		}
+	}
+
+	mockTasks[taskIndex] = updatedTask;
+	return c.json(updatedTask);
 });
 
-app.delete("/api/tasks/:id", (c) => {
+app.delete("/api/tasks/:id", async (c) => {
 	const id = c.req.param("id");
 
 	const taskIndex = mockTasks.findIndex((t) => t.id === id);
@@ -105,6 +218,11 @@ app.delete("/api/tasks/:id", (c) => {
 		return c.json({ error: "Task not found" }, 404);
 	}
 
+	const task = mockTasks[taskIndex];
+	
+	// Unschedule the task
+	await unscheduleTask(task);
+	
 	mockTasks.splice(taskIndex, 1);
 	return c.body(null, 204);
 });
@@ -138,10 +256,36 @@ app.get("/api/logs", (c) => {
 
 // Start server
 const port = process.env.PORT || 8080;
-console.log(`Server running on port ${port}`);
 
-serve({
-	fetch: app.fetch,
-	port: Number(port),
+async function startServer() {
+	try {
+		// Initialize scheduled tasks
+		await initializeScheduledTasks();
+		
+		console.log(`Server running on port ${port}`);
+		
+		serve({
+			fetch: app.fetch,
+			port: Number(port),
+		});
+	} catch (error) {
+		console.error("Failed to start server:", error);
+		process.exit(1);
+	}
+}
+
+// Graceful shutdown
+process.on("SIGTERM", async () => {
+	console.log("SIGTERM received, shutting down gracefully...");
+	await closeQueue();
+	process.exit(0);
 });
+
+process.on("SIGINT", async () => {
+	console.log("SIGINT received, shutting down gracefully...");
+	await closeQueue();
+	process.exit(0);
+});
+
+startServer();
 
