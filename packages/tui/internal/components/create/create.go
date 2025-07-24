@@ -48,17 +48,16 @@ type Model struct {
 	// Form fields
 	nameInput     textinput.Model
 	promptInput   textarea.Model
-	scheduleIndex int
-	modelIndex    int
-	outputIndex   int
+	scheduleInput textinput.Model
+	// modelIndex    int
+	// outputIndex   int
 
 	// Current focused field
 	focusedField field
 
 	// Options
-	scheduleOptions []string
-	modelOptions    []string
-	outputOptions   []string
+	// modelOptions  []string
+	// outputOptions []string
 }
 
 type keyMap struct {
@@ -72,12 +71,12 @@ type keyMap struct {
 func defaultKeyMap() keyMap {
 	return keyMap{
 		Up: key.NewBinding(
-			key.WithKeys("up", "shift+tab"),
-			key.WithHelp("↑/shift+tab", "prev field"),
+			key.WithKeys("up"),
+			key.WithHelp("↑", "prev field"),
 		),
 		Down: key.NewBinding(
-			key.WithKeys("down", "tab"),
-			key.WithHelp("↓/tab", "next field"),
+			key.WithKeys("down"),
+			key.WithHelp("↓", "next field"),
 		),
 		Tab: key.NewBinding(
 			key.WithKeys("tab"),
@@ -108,35 +107,34 @@ func New(client *api.Client) Model {
 	promptInput.SetWidth(50)
 	promptInput.SetHeight(4)
 
+	// Initialize schedule input
+	scheduleInput := textinput.New()
+	scheduleInput.Placeholder = "Daily at 9am"
+	scheduleInput.CharLimit = 100
+
 	return Model{
 		client:        client,
 		state:         stateForm,
 		keys:          defaultKeyMap(),
 		nameInput:     nameInput,
 		promptInput:   promptInput,
+		scheduleInput: scheduleInput,
 		focusedField:  fieldName,
-		scheduleIndex: 0,
-		modelIndex:    0,
-		outputIndex:   0,
-		scheduleOptions: []string{
-			"Every day at 9:00 AM",
-			"Every Monday at 9:00 AM",
-			"Every month on the 1st at 9:00 AM",
-			"Every hour",
-		},
-		modelOptions: []string{
-			"GPT-4 (Most capable)",
-			"GPT-3.5 Turbo (Faster)",
-			"Claude 3 Opus",
-			"Claude 3 Sonnet",
-		},
-		outputOptions: []string{
-			"Email to me",
-			"SMS",
-			"Slack",
-			"Discord",
-			"Webhook",
-		},
+		// modelIndex:    0,
+		// outputIndex: 0,
+		// modelOptions: []string{
+		// 	"GPT-4 (Most capable)",
+		// 	"GPT-3.5 Turbo (Faster)",
+		// 	"Claude 3 Opus",
+		// 	"Claude 3 Sonnet",
+		// },
+		// outputOptions: []string{
+		// 	"Email to me",
+		// 	"SMS",
+		// 	"Slack",
+		// 	"Discord",
+		// 	"Webhook",
+		// },
 	}
 }
 
@@ -186,40 +184,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, cmd)
 
 				case fieldSchedule:
-					switch msg.String() {
-					case "left", "h":
-						if m.scheduleIndex > 0 {
-							m.scheduleIndex--
-						}
-					case "right", "l":
-						if m.scheduleIndex < len(m.scheduleOptions)-1 {
-							m.scheduleIndex++
-						}
-					}
+					var cmd tea.Cmd
+					m.scheduleInput, cmd = m.scheduleInput.Update(msg)
+					cmds = append(cmds, cmd)
 
-				case fieldModel:
-					switch msg.String() {
-					case "left", "h":
-						if m.modelIndex > 0 {
-							m.modelIndex--
-						}
-					case "right", "l":
-						if m.modelIndex < len(m.modelOptions)-1 {
-							m.modelIndex++
-						}
-					}
+					// case fieldModel:
+					// 	switch msg.String() {
+					// 	case "left", "h":
+					// 		if m.modelIndex > 0 {
+					// 			m.modelIndex--
+					// 		}
+					// 	case "right", "l":
+					// 		if m.modelIndex < len(m.modelOptions)-1 {
+					// 			m.modelIndex++
+					// 		}
+					// 	}
 
-				case fieldOutput:
-					switch msg.String() {
-					case "left", "h":
-						if m.outputIndex > 0 {
-							m.outputIndex--
-						}
-					case "right", "l":
-						if m.outputIndex < len(m.outputOptions)-1 {
-							m.outputIndex++
-						}
-					}
+					// case fieldOutput:
+					// 	switch msg.String() {
+					// 	case "left", "h":
+					// 		if m.outputIndex > 0 {
+					// 			m.outputIndex--
+					// 		}
+					// 	case "right", "l":
+					// 		if m.outputIndex < len(m.outputOptions)-1 {
+					// 			m.outputIndex++
+					// 		}
+					// 	}
 				}
 			}
 
@@ -243,19 +234,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case errorMsg:
 		m.state = stateError
 		m.err = msg.err
-	}
-
-	// Update text inputs
-	if m.state == stateForm {
-		if m.focusedField == fieldName {
-			var cmd tea.Cmd
-			m.nameInput, cmd = m.nameInput.Update(msg)
-			cmds = append(cmds, cmd)
-		} else if m.focusedField == fieldPrompt {
-			var cmd tea.Cmd
-			m.promptInput, cmd = m.promptInput.Update(msg)
-			cmds = append(cmds, cmd)
-		}
 	}
 
 	return m, tea.Batch(cmds...)
@@ -328,25 +306,24 @@ func (m Model) renderForm() string {
 	s.WriteString("\n\n")
 
 	// Schedule field
-	scheduleView := m.renderSelect(m.scheduleOptions[m.scheduleIndex], m.focusedField == fieldSchedule)
-	s.WriteString(m.renderField("Schedule", scheduleView, m.focusedField == fieldSchedule))
+	s.WriteString(m.renderField("Schedule", m.scheduleInput.View(), m.focusedField == fieldSchedule))
 	s.WriteString("\n\n")
 
 	// Model field
-	modelView := m.renderSelect(m.modelOptions[m.modelIndex], m.focusedField == fieldModel)
-	s.WriteString(m.renderField("AI Model", modelView, m.focusedField == fieldModel))
-	s.WriteString("\n\n")
+	// modelView := m.renderSelect(m.modelOptions[m.modelIndex], m.focusedField == fieldModel)
+	// s.WriteString(m.renderField("AI Model", modelView, m.focusedField == fieldModel))
+	// s.WriteString("\n\n")
 
 	// Output field
-	outputView := m.renderSelect(m.outputOptions[m.outputIndex], m.focusedField == fieldOutput)
-	s.WriteString(m.renderField("Output Destination", outputView, m.focusedField == fieldOutput))
+	// outputView := m.renderSelect(m.outputOptions[m.outputIndex], m.focusedField == fieldOutput)
+	// s.WriteString(m.renderField("Output Destination", outputView, m.focusedField == fieldOutput))
 
 	// Help text
 	helpStyle := styles.NewStyle().
 		Foreground(t.TextMuted()).
 		MarginTop(2)
 	s.WriteString("\n\n")
-	s.WriteString(helpStyle.Render("Use ↑/↓ or Tab to navigate • ←/→ to change options • Ctrl+S to submit"))
+	s.WriteString(helpStyle.Render("Use ↑/↓ to navigate • ←/→ to change options • Ctrl+S to submit"))
 
 	return s.String()
 }
@@ -394,18 +371,22 @@ func (m *Model) focusPrevField() {
 func (m *Model) updateFocus() {
 	m.nameInput.Blur()
 	m.promptInput.Blur()
+	m.scheduleInput.Blur()
 
 	switch m.focusedField {
 	case fieldName:
 		m.nameInput.Focus()
 	case fieldPrompt:
 		m.promptInput.Focus()
+	case fieldSchedule:
+		m.scheduleInput.Focus()
 	}
 }
 
 func (m Model) validate() bool {
 	return strings.TrimSpace(m.nameInput.Value()) != "" &&
-		strings.TrimSpace(m.promptInput.Value()) != ""
+		strings.TrimSpace(m.promptInput.Value()) != "" &&
+		strings.TrimSpace(m.scheduleInput.Value()) != ""
 }
 
 func (m *Model) resetForm() {
@@ -413,9 +394,9 @@ func (m *Model) resetForm() {
 	m.err = nil
 	m.nameInput.SetValue("")
 	m.promptInput.SetValue("")
-	m.scheduleIndex = 0
-	m.modelIndex = 0
-	m.outputIndex = 0
+	m.scheduleInput.SetValue("")
+	// m.modelIndex = 0
+	// m.outputIndex = 0
 	m.focusedField = fieldName
 	m.updateFocus()
 }
@@ -431,18 +412,17 @@ type errorMsg struct {
 func (m Model) createTask() tea.Cmd {
 	return func() tea.Msg {
 		// Map indices to actual values
-		scheduleMap := []string{"daily", "weekly", "monthly", "hourly"}
-		modelMap := []string{"gpt-4", "gpt-3.5-turbo", "claude-3-opus", "claude-3-sonnet"}
-		outputMap := []string{"email", "sms", "slack", "discord", "webhook"}
+		// modelMap := []string{"gpt-4", "gpt-3.5-turbo", "claude-3-opus", "claude-3-sonnet"}
+		// outputMap := []string{"email", "sms", "slack", "discord", "webhook"}
 
 		task := api.Task{
 			Name:     m.nameInput.Value(),
 			Prompt:   m.promptInput.Value(),
-			Schedule: scheduleMap[m.scheduleIndex],
-			Model:    modelMap[m.modelIndex],
-			Output:   outputMap[m.outputIndex],
-			Status:   "ACTIVE",
-			NextRun:  calculateNextRun(scheduleMap[m.scheduleIndex]),
+			Schedule: m.scheduleInput.Value(),
+			// Model:    modelMap[m.modelIndex],
+			// Output:   outputMap[m.outputIndex],
+			Status:  "ACTIVE",
+			NextRun: calculateNextRun(m.scheduleInput.Value()),
 		}
 
 		_, err := m.client.CreateTask(task)
@@ -457,26 +437,29 @@ func (m Model) createTask() tea.Cmd {
 func calculateNextRun(schedule string) time.Time {
 	now := time.Now()
 
+	// Handle special aliases
 	switch schedule {
-	case "hourly":
+	case "@hourly":
 		return now.Add(time.Hour)
-	case "daily":
-		// Next day at 9 AM
-		next := time.Date(now.Year(), now.Month(), now.Day()+1, 9, 0, 0, 0, now.Location())
+	case "@daily":
+		// Next day at midnight
+		next := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
 		return next
-	case "weekly":
-		// Next Monday at 9 AM
-		daysUntilMonday := (8 - int(now.Weekday())) % 7
-		if daysUntilMonday == 0 {
-			daysUntilMonday = 7
+	case "@weekly":
+		// Next Sunday at midnight
+		daysUntilSunday := (7 - int(now.Weekday())) % 7
+		if daysUntilSunday == 0 {
+			daysUntilSunday = 7
 		}
-		next := time.Date(now.Year(), now.Month(), now.Day()+daysUntilMonday, 9, 0, 0, 0, now.Location())
+		next := time.Date(now.Year(), now.Month(), now.Day()+daysUntilSunday, 0, 0, 0, 0, now.Location())
 		return next
-	case "monthly":
-		// First day of next month at 9 AM
-		next := time.Date(now.Year(), now.Month()+1, 1, 9, 0, 0, 0, now.Location())
+	case "@monthly":
+		// First day of next month at midnight
+		next := time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location())
 		return next
 	default:
-		return now.Add(24 * time.Hour)
+		// For now, just return next hour for cron expressions
+		// TODO: Implement proper cron parsing
+		return now.Add(time.Hour)
 	}
 }
