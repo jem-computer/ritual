@@ -3,6 +3,8 @@
 
 import { Queue, Worker } from 'bullmq';
 import Redis from 'ioredis';
+import { getAIService } from './ai-service.js';
+import { getTaskById, updateTask, createExecutionLog } from './db.js';
 
 // Redis connection with retry logic
 const connection = new Redis({
@@ -57,23 +59,73 @@ export const taskQueue = new Queue('ritual-tasks', {
 export const taskWorker = new Worker(
   'ritual-tasks',
   async (job) => {
-    const { taskId, prompt, outputChannels } = job.data;
+    const { taskId, prompt, outputChannels, model } = job.data;
+    const startTime = Date.now();
     
     console.log(`[${new Date().toISOString()}] Executing task ${taskId}:`);
     console.log(`  Prompt: ${prompt}`);
+    console.log(`  Model: ${model}`);
     console.log(`  Output channels: ${outputChannels.join(', ')}`);
     
-    // TODO: In the future, this will:
-    // 1. Execute the AI prompt
-    // 2. Send results to specified output channels
-    // For now, just log the execution
-    
-    return {
-      taskId,
-      executedAt: new Date().toISOString(),
-      status: 'completed',
-      message: `Task ${taskId} executed successfully`,
-    };
+    try {
+      // Get task details
+      const task = await getTaskById(taskId);
+      if (!task) {
+        throw new Error(`Task ${taskId} not found`);
+      }
+      
+      // Execute the AI prompt
+      const aiService = getAIService();
+      const result = await aiService.executePrompt(prompt, model);
+      
+      // TODO: Send results to specified output channels
+      // For now, just log the output
+      console.log(`Task ${taskId} output: ${result.output}`);
+      
+      // Update task's last run time
+      await updateTask(taskId, {
+        lastRun: new Date().toISOString(),
+      });
+      
+      // Log successful execution
+      await createExecutionLog({
+        taskId,
+        taskName: task.name,
+        prompt,
+        output: result.output,
+        status: 'SUCCESS',
+        error: null,
+        executedAt: new Date().toISOString(),
+        duration: Date.now() - startTime,
+      });
+      
+      return {
+        taskId,
+        executedAt: new Date().toISOString(),
+        status: 'SUCCESS',
+        output: result.output,
+        usage: result.usage,
+      };
+    } catch (error) {
+      console.error(`Task ${taskId} failed:`, error);
+      
+      // Log failed execution
+      const task = await getTaskById(taskId);
+      if (task) {
+        await createExecutionLog({
+          taskId,
+          taskName: task.name,
+          prompt,
+          output: '',
+          status: 'FAILURE',
+          error: error instanceof Error ? error.message : 'Unknown error',
+          executedAt: new Date().toISOString(),
+          duration: Date.now() - startTime,
+        });
+      }
+      
+      throw error;
+    }
   },
   {
     connection,

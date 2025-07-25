@@ -7,6 +7,19 @@ import { logger } from "hono/logger";
 import { serve } from "@hono/node-server";
 import { taskQueue, closeQueue, isRedisConnected } from "./queue.js";
 import { parseSchedule } from "./schedule-parser.js";
+import {
+	initDatabase,
+	closeDatabase,
+	getAllTasks,
+	getTaskById,
+	createTask,
+	updateTask,
+	deleteTask,
+	getAllExecutionLogs,
+	type Task,
+	type ExecutionLog,
+} from "./db.js";
+import { initAIService } from "./ai-service.js";
 
 const app = new Hono();
 
@@ -14,65 +27,6 @@ const app = new Hono();
 app.use("/*", cors());
 app.use(logger());
 
-// Types
-interface Task {
-	id: string;
-	name: string;
-	status: "ACTIVE" | "PAUSED";
-	prompt: string;
-	schedule: string;
-	output: string;
-	model: string;
-	nextRun: string | null;
-	lastRun: string | null;
-	createdAt: string;
-	updatedAt: string;
-	jobId?: string; // BullMQ job ID for scheduled tasks
-}
-
-// Mock data store (in-memory for now)
-const mockTasks: Task[] = [
-	{
-		id: "1",
-		name: "Daily Task Summary",
-		status: "ACTIVE",
-		prompt: "Summarize today's Things tasks in iambic pentameter",
-		schedule: "daily at 8:00 AM",
-		output: "SMS to +1234567890",
-		model: "gpt-4",
-		nextRun: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(),
-		lastRun: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString(),
-		createdAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-		updatedAt: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString(),
-	},
-	{
-		id: "2",
-		name: "Team Commit Summary",
-		status: "ACTIVE",
-		prompt: "Send my team a summary of today's commits",
-		schedule: "daily at 6:00 PM",
-		output: "Slack #dev-team",
-		model: "gpt-3.5-turbo",
-		nextRun: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString(),
-		lastRun: new Date(Date.now() - 18 * 60 * 60 * 1000).toISOString(),
-		createdAt: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(),
-		updatedAt: new Date(Date.now() - 18 * 60 * 60 * 1000).toISOString(),
-	},
-	{
-		id: "3",
-		name: "Weekly Report",
-		status: "PAUSED",
-		prompt:
-			"Generate a weekly productivity report based on my calendar and tasks",
-		schedule: "weekly on Friday at 5:00 PM",
-		output: "Email to me@example.com",
-		model: "gpt-4",
-		nextRun: new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString(),
-		lastRun: null,
-		createdAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
-		updatedAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
-	},
-];
 
 // Helper functions for job management
 async function scheduleTask(task: Task) {
@@ -137,7 +91,8 @@ async function unscheduleTask(task: Task) {
 
 // Initialize scheduled tasks on startup
 async function initializeScheduledTasks() {
-	for (const task of mockTasks) {
+	const tasks = await getAllTasks();
+	for (const task of tasks) {
 		if (task.status === "ACTIVE") {
 			await scheduleTask(task);
 		}
@@ -148,27 +103,25 @@ async function initializeScheduledTasks() {
 app.get("/health", (c) => {
 	return c.json({ 
 		status: "ok",
-		redis: isRedisConnected() ? "connected" : "disconnected"
+		redis: isRedisConnected() ? "connected" : "disconnected",
+		database: "connected"
 	});
 });
 
 // Task routes
-app.get("/api/tasks", (c) => {
-	return c.json(mockTasks);
+app.get("/api/tasks", async (c) => {
+	const tasks = await getAllTasks();
+	return c.json(tasks);
 });
 
 app.post("/api/tasks", async (c) => {
 	const body = await c.req.json();
-	const newTask: Task = {
-		id: String(mockTasks.length + 1),
+	
+	const newTask = await createTask({
 		...body,
 		nextRun: null,
 		lastRun: null,
-		createdAt: new Date().toISOString(),
-		updatedAt: new Date().toISOString(),
-	};
-	
-	mockTasks.push(newTask);
+	});
 	
 	// Schedule the task if it's active
 	if (newTask.status === "ACTIVE") {
@@ -182,76 +135,59 @@ app.put("/api/tasks/:id", async (c) => {
 	const id = c.req.param("id");
 	const body = await c.req.json();
 
-	const taskIndex = mockTasks.findIndex((t) => t.id === id);
-	if (taskIndex === -1) {
+	const oldTask = await getTaskById(id);
+	if (!oldTask) {
 		return c.json({ error: "Task not found" }, 404);
 	}
 
-	const oldTask = mockTasks[taskIndex];
-	const updatedTask = {
-		...oldTask,
-		...body,
-		id, // Preserve the ID
-		updatedAt: new Date().toISOString(),
-	};
-
 	// Handle scheduling changes
-	if (oldTask.status !== updatedTask.status || oldTask.schedule !== updatedTask.schedule) {
-		// Unschedule old job
-		await unscheduleTask(oldTask);
+	if (body.status !== undefined || body.schedule !== undefined) {
+		const willBeActive = body.status !== undefined ? body.status === "ACTIVE" : oldTask.status === "ACTIVE";
+		const scheduleChanged = body.schedule !== undefined && body.schedule !== oldTask.schedule;
 		
-		// Schedule new job if active
-		if (updatedTask.status === "ACTIVE") {
-			await scheduleTask(updatedTask);
+		// Unschedule old job if needed
+		if (oldTask.status === "ACTIVE" && (!willBeActive || scheduleChanged)) {
+			await unscheduleTask(oldTask);
+		}
+		
+		// Schedule new job if needed
+		if (willBeActive && (oldTask.status !== "ACTIVE" || scheduleChanged)) {
+			const taskToSchedule = { ...oldTask, ...body };
+			await scheduleTask(taskToSchedule);
 		}
 	}
 
-	mockTasks[taskIndex] = updatedTask;
+	const updatedTask = await updateTask(id, body);
+	if (!updatedTask) {
+		return c.json({ error: "Failed to update task" }, 500);
+	}
+	
 	return c.json(updatedTask);
 });
 
 app.delete("/api/tasks/:id", async (c) => {
 	const id = c.req.param("id");
 
-	const taskIndex = mockTasks.findIndex((t) => t.id === id);
-	if (taskIndex === -1) {
+	const task = await getTaskById(id);
+	if (!task) {
 		return c.json({ error: "Task not found" }, 404);
 	}
-
-	const task = mockTasks[taskIndex];
 	
 	// Unschedule the task
 	await unscheduleTask(task);
 	
-	mockTasks.splice(taskIndex, 1);
+	const deleted = await deleteTask(id);
+	if (!deleted) {
+		return c.json({ error: "Failed to delete task" }, 500);
+	}
+	
 	return c.body(null, 204);
 });
 
-// Mock logs
-const mockLogs = [
-	{
-		id: "1",
-		taskId: "1",
-		taskName: "Daily Task Summary",
-		output:
-			"Today's tasks in verse, a summary terse:\nTwo bugs were fixed with careful thought,\nThree features planned, though time was short.\nThe standup call ran fifteen long,\nBut progress made was rather strong.",
-		status: "SUCCESS",
-		executedAt: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString(),
-	},
-	{
-		id: "2",
-		taskId: "2",
-		taskName: "Team Commit Summary",
-		output:
-			"Team commits today:\n- Fixed authentication bug in login flow\n- Added dark mode support to dashboard\n- Updated dependencies to latest versions\n- Improved error handling in API client",
-		status: "SUCCESS",
-		executedAt: new Date(Date.now() - 18 * 60 * 60 * 1000).toISOString(),
-	},
-];
-
 // Log routes
-app.get("/api/logs", (c) => {
-	return c.json(mockLogs);
+app.get("/api/logs", async (c) => {
+	const logs = await getAllExecutionLogs();
+	return c.json(logs);
 });
 
 // Start server
@@ -259,6 +195,12 @@ const port = process.env.PORT || 8080;
 
 async function startServer() {
 	try {
+		// Initialize database
+		await initDatabase();
+		
+		// Initialize AI service
+		initAIService();
+		
 		// Initialize scheduled tasks
 		await initializeScheduledTasks();
 		
@@ -278,12 +220,14 @@ async function startServer() {
 process.on("SIGTERM", async () => {
 	console.log("SIGTERM received, shutting down gracefully...");
 	await closeQueue();
+	await closeDatabase();
 	process.exit(0);
 });
 
 process.on("SIGINT", async () => {
 	console.log("SIGINT received, shutting down gracefully...");
 	await closeQueue();
+	await closeDatabase();
 	process.exit(0);
 });
 
