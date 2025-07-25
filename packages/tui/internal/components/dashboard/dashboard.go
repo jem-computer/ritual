@@ -63,18 +63,22 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 		return
 	}
 
-	var str string
+	var s strings.Builder
+
 	if index == m.Index() {
 		// Selected item - add a bullet point and highlight
 		title := styles.NewStyle().
 			Foreground(t.Primary()).
 			Bold(true).
-			Render("• " + i.Title())
+			Render("✦ " + i.Title())
 		desc := styles.NewStyle().
 			Foreground(t.TextMuted()).
 			PaddingLeft(2).
+			MarginBottom(1).
 			Render(i.Description())
-		str = fmt.Sprintf("%s\n%s", title, desc)
+		s.WriteString(title)
+		s.WriteString("\n")
+		s.WriteString(desc)
 	} else {
 		// Normal item
 		title := styles.NewStyle().
@@ -84,11 +88,14 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 		desc := styles.NewStyle().
 			Foreground(t.TextMuted()).
 			PaddingLeft(2).
+			MarginBottom(1).
 			Render(i.Description())
-		str = fmt.Sprintf("%s\n%s", title, desc)
+		s.WriteString(title)
+		s.WriteString("\n")
+		s.WriteString(desc)
 	}
 
-	fmt.Fprint(w, str)
+	fmt.Fprint(w, s.String())
 }
 
 type Model struct {
@@ -145,15 +152,32 @@ func New(client *api.Client) Model {
 
 	l := list.New([]list.Item{}, delegate, 0, 0)
 	l.Title = ""
-	l.SetShowStatusBar(false)
+	l.SetShowStatusBar(true)
 	l.SetFilteringEnabled(false) // Disable filtering for now
-	l.SetShowHelp(false)
+	l.SetShowHelp(true)
 	l.DisableQuitKeybindings()
 
 	// Update list keybindings to match our custom ones
 	keys := defaultKeyMap()
 	l.KeyMap.CursorUp = keys.Up
 	l.KeyMap.CursorDown = keys.Down
+
+	// Add our custom keys to the list's help
+	l.AdditionalShortHelpKeys = func() []key.Binding {
+		return []key.Binding{
+			keys.Enter,
+			keys.Pause,
+			keys.Delete,
+		}
+	}
+	l.AdditionalFullHelpKeys = func() []key.Binding {
+		return []key.Binding{
+			keys.Enter,
+			keys.Pause,
+			keys.Delete,
+			keys.Retry,
+		}
+	}
 
 	return Model{
 		client: client,
@@ -251,6 +275,15 @@ func (m Model) View() string {
 	s.WriteString(headerStyle.Render("> SCHEDULED TASKS"))
 	s.WriteString("\n\n")
 
+	// NEW TASK button at bottom right
+	buttonStyle := styles.NewStyle().
+		Background(t.Primary()).
+		Foreground(t.Background()).
+		Padding(0, 2).
+		Bold(true)
+
+	s.WriteString(lipgloss.PlaceHorizontal(m.width-4, lipgloss.Left, buttonStyle.Render("+ NEW TASK")))
+
 	if m.err != nil {
 		// Error state
 		errorStyle := styles.NewStyle().
@@ -279,15 +312,6 @@ func (m Model) View() string {
 	if remainingHeight > 0 {
 		s.WriteString(strings.Repeat("\n", remainingHeight))
 	}
-
-	// NEW TASK button at bottom right
-	buttonStyle := styles.NewStyle().
-		Background(t.Primary()).
-		Foreground(t.Background()).
-		Padding(0, 2).
-		Bold(true)
-
-	s.WriteString(lipgloss.PlaceHorizontal(m.width-4, lipgloss.Right, buttonStyle.Render("+ NEW TASK")))
 
 	return s.String()
 }

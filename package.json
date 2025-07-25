@@ -1,20 +1,22 @@
 {
-  "name": "ritual",
-  "version": "0.1.0",
-  "private": true,
-  "workspaces": [
-    "packages/*"
-  ],
-  "scripts": {
-    "dev": "node scripts/dev.js",
-    "dev:server": "cd packages/server && bun run dev",
-    "dev:tui": "cd packages/tui && go run cmd/ritual/main.go --server http://localhost:8080",
-    "build": "npm run build:server && npm run build:tui",
-    "build:server": "cd packages/server && bun run build",
-    "build:tui": "cd packages/tui && go build -o ../../dist/ritual cmd/ritual/main.go",
-    "install:deps": "bun install && cd packages/tui && go mod download && go mod tidy"
-  },
-  "devDependencies": {
-    "concurrently": "^8.2.2"
-  }
+	"name": "ritual",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"workspaces": [
+		"packages/*"
+	],
+	"scripts": {
+		"dev": "bun scripts/dev.ts",
+		"dev:server": "cd packages/server && bun run dev",
+		"dev:tui": "cd packages/tui && go run cmd/ritual/main.go --server http://localhost:8080",
+		"build": "npm run build:server && npm run build:tui",
+		"build:server": "cd packages/server && bun run build",
+		"build:tui": "cd packages/tui && go build -o ../../dist/ritual cmd/ritual/main.go",
+		"install:deps": "bun install && cd packages/tui && go mod download && go mod tidy"
+	},
+	"devDependencies": {
+		"concurrently": "^8.2.2"
+	}
 }
+
